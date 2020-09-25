@@ -639,8 +639,8 @@ class PAYLOAD_INFO_HEADER (Structure):
         ( 'Machine'           , c_uint16),
         ( 'Capability'        , c_uint32),
         ( 'ImageOffset'       , c_uint32),
-        ( 'ImageBase'         , c_uint64),
         ( 'ImageLength'       , c_uint32),
+        ( 'ImageBase'         , c_uint64),
         ( 'ImageAlignment'    , c_uint32),
         ( 'EntryPointOffset'  , c_uint32),
     ]
@@ -705,16 +705,19 @@ class PAYLOAD_HEADER_HELPER:
 
 
     @staticmethod
-    def create_reloc_table (reloc_fmt, reloc_img_off, reloc_data):
+    def create_reloc_table (reloc_fmt, reloc_img_off, reloc_data, stripped = 0):
         pld_reloc_hdr = PAYLOAD_RELOC_HEADER ()
         pld_reloc_hdr.CommonHeader.Identifier     = b'PLDR'
         pld_reloc_hdr.CommonHeader.HeaderLength   = sizeof(pld_reloc_hdr) + len(reloc_data)
         pld_reloc_hdr.CommonHeader.HeaderRevision = 1
         pld_reloc_hdr.RelocFmt = reloc_fmt
-        pld_reloc_hdr.RelocImgOffet = reloc_img_off
+        pld_reloc_hdr.RelocImgOffset   = reloc_img_off
+        pld_reloc_hdr.RelocImgStripped = stripped
+
         if reloc_fmt ==  PAYLOAD_RELOC_HEADER.RELOC_FMT_PTR:
             if len(reloc_data) != sizeof(PE_RELOC_BLOCK_HEADER):
                 raise Exception ('Unexpected relocation data length !')
+
         return pld_reloc_hdr, bytearray(reloc_data)
 
 
@@ -933,7 +936,7 @@ def parse_payload_bin (bin):
         print ("Unexpected payload image format !")
         return
 
-    image.append (pld_info_hdr)
+    image.append ((offset, pld_info_hdr))
     dlen    = pld_info_hdr.CommonHeader.HeaderLength
     offset += dlen + get_padding_size (dlen)
 
@@ -942,16 +945,17 @@ def parse_payload_bin (bin):
         if pld_reloc_hdr.CommonHeader.Identifier != b'PLDR':
             print ("Unexpected relocation table format !")
             return
-        image.append (pld_reloc_hdr)
+        image.append ((offset, pld_reloc_hdr))
         dlen    = pld_reloc_hdr.CommonHeader.HeaderLength
         rel_len = dlen   - sizeof(PAYLOAD_RELOC_HEADER)
         rel_off = offset + sizeof(PAYLOAD_RELOC_HEADER)
-        image.append (bin[rel_off:rel_off + rel_len])
         offset += dlen + get_padding_size (dlen)
+        image.append ((offset, bin[rel_off:rel_off + rel_len]))
+
 
     offset  = pld_info_hdr.ImageOffset
     pld_len = pld_info_hdr.ImageLength
-    image.append (bin[offset:offset + pld_len])
+    image.append ((offset, bin[offset:offset + pld_len]))
     offset += pld_len
 
     if pld_info_hdr.Capability &  PAYLOAD_INFO_HEADER.CAP_AUTH:
@@ -959,29 +963,28 @@ def parse_payload_bin (bin):
         if pld_auth_hdr.CommonHeader.Identifier != b'PLDA':
             print ("Unexpected authentication table format !")
             return
-        image.append (pld_auth_hdr)
+        image.append ((offset, pld_auth_hdr))
         offset += sizeof(PAYLOAD_AUTH_HEADER)
         signature_hdr = SIGNATURE_HDR.from_buffer (bin, offset)
         if signature_hdr.Identifier != b'SIGN':
             print ("Unexpected signature format !")
             return
-        image.append (signature_hdr)
+        image.append ((offset, signature_hdr))
         offset += sizeof(signature_hdr)
         dlen = signature_hdr.SigSize
-        image.append (bin[offset:offset+dlen])
+        image.append ((offset, bin[offset:offset+dlen]))
         offset += dlen
         pubkey_hdr = PUB_KEY_HDR.from_buffer (bin, offset)
         if pubkey_hdr.Identifier != b'PUBK':
             print ("Unexpected public key format !")
             return
-        image.append (pubkey_hdr)
+        image.append ((offset, pubkey_hdr))
         offset += sizeof(pubkey_hdr)
         dlen = pubkey_hdr.KeySize
-        image.append (bin[offset:offset+dlen])
+        image.append ((offset, bin[offset:offset+dlen]))
         offset += dlen + get_padding_size (dlen)
 
-    offset = 0
-    for each in image:
+    for offset, each in image:
         if type(each) is bytearray:
             indent = 4
             if 'PAYLOAD_RELOC_HEADER' in last_type:
@@ -1011,16 +1014,14 @@ def parse_payload_bin (bin):
             print ('\n%sOffset:0x%06x %s' % (' ' * indent, offset, lines))
             dlen = sizeof(each)
 
-        offset += dlen
 
-    if offset != pld_info_hdr.Length:
-        print ('Payload image length does not match the length in header !')
+    if offset + dlen != pld_info_hdr.Length:
+        print ('Payload image length (0x%06X) does not match the length in header (0x%06X) !' % (offset, pld_info_hdr.Length))
 
 
-def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_scheme = 'RSA_PSS'):
+def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_scheme = 'RSA_PSS', alignment = 0x1000, align_in_place = False):
     pld_info_hdr = PAYLOAD_INFO_HEADER ()
     pld_info_hdr.ImageLength = len(fd_bin)
-    alignment = 0x1000
     if not (alignment and (not(alignment & (alignment - 1)))):
         raise Exception ('Image alignment needs to be power of 2 !')
     pld_info_hdr.ImageAlignment = alignment
@@ -1035,23 +1036,33 @@ def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_schem
     pe_obj = PeTeImage(0, pe_img)
     roff, rlen = pe_obj.ParseReloc()
 
+    if pe_obj.IsTeImage():
+        stripped = pe_obj.TeHdr.StrippedSize
+    else:
+        stripped = 0
+
     if reloc_fmt == PAYLOAD_RELOC_HEADER.RELOC_FMT_RAW:
         reloc_data = pe_img[roff : roff + rlen]
     else:
         reloc_data = PE_RELOC_BLOCK_HEADER ()
         reloc_data.PageRVA   = sec_off + roff
         reloc_data.BlockSize = rlen
-    pld_reloc_hdr, pld_reloc_data = PAYLOAD_HEADER_HELPER.create_reloc_table (reloc_fmt, sec_off, bytearray (reloc_data))
+
+    pld_reloc_hdr, pld_reloc_data = PAYLOAD_HEADER_HELPER.create_reloc_table (reloc_fmt, sec_off, bytearray (reloc_data), stripped)
     pld_reloc_tbl = bytearray(pld_reloc_hdr) + pld_reloc_data
 
     pld_info_hdr_len = sizeof(pld_info_hdr)
     reloc_tbl_off = pld_info_hdr_len + get_padding_size (pld_info_hdr_len)
 
     reloc_tbl_len = len(pld_reloc_tbl)
-    pld_img_off = reloc_tbl_off + reloc_tbl_len + get_padding_size (reloc_tbl_len)
+    curr_offset   = reloc_tbl_off + reloc_tbl_len
+    pld_img_off   = curr_offset + get_padding_size (curr_offset)
+    if align_in_place:
+        pld_img_off += get_padding_size (pld_img_off, alignment)
 
     pld_img_len  = len(fd_bin)
-    pld_auth_off = pld_img_off + pld_img_len + get_padding_size (pld_img_len)
+    curr_offset  = pld_img_off + pld_img_len
+    pld_auth_off = curr_offset + get_padding_size (curr_offset)
 
     if reloc_tbl_len > 0:
         pld_info_hdr.Capability |= PAYLOAD_INFO_HEADER.CAP_RELOC
@@ -1060,7 +1071,7 @@ def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_schem
         pld_info_hdr.Capability |= PAYLOAD_INFO_HEADER.CAP_AUTH
 
     pld_info_hdr.Machine = pe_obj.GetMachineType ()
-    pld_info_hdr.EntryPointOffset = pe_obj.GetEntrypoint ()
+    pld_info_hdr.EntryPointOffset = pe_obj.GetEntrypoint () + sec_off
     pld_info_hdr.ImageOffset = pld_img_off
     pld_info_hdr.Length   = pld_auth_off
     pld_info_hdr.Revision = 0x00010001
@@ -1075,6 +1086,9 @@ def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_schem
     pld_bin = bytearray()
     for name, doff, bins in img_info:
         dlen    = len(bins)
+        if doff > offset:
+            pld_bin.extend (b'\x00' * (doff - offset))
+            offset = doff
         offset += dlen
         pld_bin.extend (bins)
 
@@ -1082,9 +1096,10 @@ def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_schem
     auth_bin = bytearray(auth_comp[0]) + bytearray(auth_comp[1]) + auth_comp[2] + bytearray(auth_comp[3]) + auth_comp[4]
 
     pld_info_hdr = PAYLOAD_INFO_HEADER.from_buffer (pld_bin)
-    pld_info_hdr.Length = pld_info_hdr.Length
+    pld_info_hdr.Length = len(pld_bin) + (get_padding_size (offset) + len(auth_bin))
 
-    return pld_bin + auth_bin
+    padding = b'\x00' * get_padding_size (offset)
+    return pld_bin + padding + auth_bin
 
 
 
@@ -1094,17 +1109,19 @@ def main():
 
     parser.add_argument('-i',  '--in_image',  type=str,  required=True, help='Payload input image file path')
     parser.add_argument('-t',  '--type',      type=str,  default = 'UEFI', choices=['UEFI'],  help='Payload type')
-    parser.add_argument('-o',  '--out_image', type=str,  default = '', help='Payload output image file path')
-    parser.add_argument('-k',  '--key',       type=str,  default = '', help='Private key for payload signing')
+    parser.add_argument('-o',  '--out_image', type=str,  default =  '', help='Payload output image file path')
+    parser.add_argument('-k',  '--key',       type=str,  default =  '', help='Private key for payload signing')
+    parser.add_argument('-a',  '--align',     type=str,  default = '1', help='Actual raw payload alignment in image')
+    parser.add_argument('-ai', '--align_in_place', action='store_true', help='The raw payload needs to be aligned in place or not')
 
     # Parse command line arguments
     args = parser.parse_args()
 
     if args.out_image:
         bins = get_file_data (args.in_image)
-        pld_bin = build_payload_fd (bins, pri_key = args.key)
+        pld_bin = build_payload_fd (bins, pri_key = args.key, alignment = int(args.align, 0), align_in_place = args.align_in_place)
         gen_file_from_object (args.out_image, pld_bin)
-        print ("The payload image has been created successfully !\n%s" % args.out_image)
+        print ("The payload image with length 0x%06X has been created successfully !\n%s" % (len(pld_bin), args.out_image))
     else:
         bin = bytearray(get_file_data(args.in_image))
         parse_payload_bin (bin)
