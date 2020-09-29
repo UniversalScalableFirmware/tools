@@ -1037,7 +1037,7 @@ def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_schem
     roff, rlen = pe_obj.ParseReloc()
 
     if pe_obj.IsTeImage():
-        stripped = pe_obj.TeHdr.StrippedSize
+        stripped = pe_obj.TeHdr.StrippedSize - sizeof(pe_obj.TeHdr)
     else:
         stripped = 0
 
@@ -1070,9 +1070,15 @@ def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_schem
     if pri_key:
         pld_info_hdr.Capability |= PAYLOAD_INFO_HEADER.CAP_AUTH
 
+    if pe_obj.IsTeImage():
+        curr_base = pe_obj.TeHdr.ImageBase + stripped
+    else:
+        curr_base = pe_obj.PeHdr.OptionalHeader.PeOptHdr.ImageBase
+
     pld_info_hdr.Machine = pe_obj.GetMachineType ()
-    pld_info_hdr.EntryPointOffset = pe_obj.GetEntrypoint () + sec_off
+    pld_info_hdr.EntryPointOffset = pe_obj.GetEntrypoint () + sec_off - stripped
     pld_info_hdr.ImageOffset = pld_img_off
+    pld_info_hdr.ImageBase   = curr_base - pld_reloc_hdr.RelocImgOffset
     pld_info_hdr.Length   = pld_auth_off
     pld_info_hdr.Revision = 0x00010001
 
