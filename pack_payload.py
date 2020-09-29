@@ -749,6 +749,7 @@ class PAYLOAD_HEADER_HELPER:
         os.remove (tmp_in)
         os.remove (tmp_out)
 
+
         sign = SIGNATURE_HDR()
         sign.SigSize = len(signature)
         sign.SigType = SIGN_TYPE_SCHEME[sign_scheme]
@@ -1019,7 +1020,7 @@ def parse_payload_bin (bin):
         print ('Payload image length (0x%06X) does not match the length in header (0x%06X) !' % (offset, pld_info_hdr.Length))
 
 
-def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_256', sign_scheme = 'RSA_PSS', alignment = 0x1000, align_in_place = False):
+def build_payload_fd (fd_bin, pri_key = None, hash_type = 'SHA2_384', sign_scheme = 'RSA_PSS', alignment = 0x1000, align_in_place = False):
     pld_info_hdr = PAYLOAD_INFO_HEADER ()
     pld_info_hdr.ImageLength = len(fd_bin)
     if not (alignment and (not(alignment & (alignment - 1)))):
