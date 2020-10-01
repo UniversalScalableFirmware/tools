@@ -218,12 +218,19 @@ def main():
         print ("build UEFI payload error")
         sys.exit(1)
 
-    # copy payload binary to bootloader repo
+    # pack payload binary and copy to SBL repo
     pld_file = os.path.join(work_dir, 'edk2', 'Build', 'UefiPayloadPkgX64', '%s_%s' % ('RELEASE' if args.release else 'DEBUG', os.environ['TOOL_CHAIN']), 'FV', 'UEFIPAYLOAD.fd')
     dst_dir  = os.path.join(work_dir, 'slimbootloader', 'Platform', 'QemuBoardPkg', 'Binaries')
     if not os.path.isdir(dst_dir):
         os.makedirs(dst_dir)
-    shutil.copy(pld_file, os.path.join(dst_dir, 'UefiPld.fd'))
+    dst_file = os.path.join(dst_dir, 'UefiPld.fd')
+    key_file = os.path.join(work_dir, 'SblKeys', 'OS1_TestKey_Priv_RSA3072.pem')
+    pack_cmd = ['python', 'pack_payload.py', '-t', 'UEFI', '-i', pld_file, '-o', dst_file, '-a', '0x1000', '-ai', '-k', key_file]
+    print (pack_cmd)
+    ret = subprocess.call(pack_cmd, cwd=tool_dir)
+    if ret:
+        print ('Failed to pack UEFI paylaod!')
+        sys.exit(1)
 
     print ('\n\nbuild Slim bootloader with UEFI payload....')
     build_sbl(os.path.join(work_dir, 'slimbootloader'), args.release, args.arch64)
