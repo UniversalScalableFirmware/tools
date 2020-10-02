@@ -225,7 +225,7 @@ def main():
         os.makedirs(dst_dir)
     dst_file = os.path.join(dst_dir, 'UefiPld.fd')
     key_file = os.path.join(work_dir, 'SblKeys', 'OS1_TestKey_Priv_RSA3072.pem')
-    pack_cmd = ['python', 'pack_payload.py', '-t', 'UEFI', '-i', pld_file, '-o', dst_file, '-a', '0x1000', '-ai', '-k', key_file]
+    pack_cmd = ['python', 'pack_payload.py', '-t', 'uefi', '-i', pld_file, '-o', dst_file, '-a', '0x1000', '-ai', '-k', key_file]
     print (pack_cmd)
     ret = subprocess.call(pack_cmd, cwd=tool_dir)
     if ret:
