@@ -650,7 +650,6 @@ class PAYLOAD_INFO_HEADER (Structure):
         self.CommonHeader.HeaderLength   = sizeof(PAYLOAD_INFO_HEADER)
         self.CommonHeader.HeaderRevision = 1
         self.ProducerId     = b'Intel'
-        self.ImageId        = b'UEFI_PLD'
 
 
 class PAYLOAD_RELOC_HEADER (Structure):
@@ -1021,7 +1020,7 @@ def parse_payload_bin (bin):
 
 
 
-def build_payload (img_type, img_bin, alignment = 0x1000, align_in_image = False, pri_key = None, hash_type = 'SHA2_384', sign_scheme = 'RSA_PSS'):
+def build_payload (img_type, img_bin, stub = '', alignment = 0x1000, align_in_image = False, pri_key = None, hash_type = 'SHA2_384', sign_scheme = 'RSA_PSS'):
 
     if not (alignment and (not(alignment & (alignment - 1)))):
         raise Exception ('Image alignment needs to be power of 2 !')
@@ -1035,11 +1034,22 @@ def build_payload (img_type, img_bin, alignment = 0x1000, align_in_image = False
     reloc_fmt  = PAYLOAD_RELOC_HEADER.RELOC_FMT_RAW
     #reloc_fmt = PAYLOAD_RELOC_HEADER.RELOC_FMT_PTR
     if img_type == 'uefi':
+        pld_info_hdr.ImageId        = b'UEFI_PLD'
         sec_off, sec_len = PAYLOAD_HEADER_HELPER.locate_sec_image_in_fd (pld_bin)
         pe_img = pld_bin[sec_off:sec_off + sec_len]
-    if img_type == 'pecoff':
+    elif img_type == 'pecoff':
+        pld_info_hdr.ImageId        = b'PE32_PLD'
         sec_off, sec_len = 0, len(pld_bin)
         pe_img = pld_bin
+    elif img_type == 'linux':
+        pld_info_hdr.ImageId        = b'LINUXPLD'
+        stub_bin = bytearray(get_file_data (stub))
+        sec_off, sec_len = 0, len(stub_bin)
+        pe_img = stub_bin
+        pld_bin = stub_bin + b'\x00' * get_padding_size (len(stub_bin), 0x1000) +  pld_bin
+    else:
+        raise Exception ('Unsupported payload type "%s" !' % img_type)
+
     pe_obj = PeTeImage(0, pe_img)
     roff, rlen = pe_obj.ParseReloc()
     if pe_obj.IsTeImage():
@@ -1122,19 +1132,24 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-i',  '--in_image',  type=str,  required=True, help='Payload input image file path')
-    parser.add_argument('-t',  '--type',      type=str,  default = 'uefi', choices=['uefi', 'pecoff'],  help='Payload type')
+    parser.add_argument('-t',  '--type',      type=str,  default = 'uefi', choices=['uefi', 'linux', 'pecoff'],  help='Payload type')
     parser.add_argument('-o',  '--out_image', type=str,  default =  '', help='Payload output image file path')
     parser.add_argument('-k',  '--key',       type=str,  default =  '', help='Private key for payload signing')
     parser.add_argument('-a',  '--align',     type=str,  default = '1', help='Actual raw payload alignment in image')
+    parser.add_argument('-s',  '--stub',      type=str,  default = '',  help='When payload type is Linux, the stub binary is required')
     parser.add_argument('-ai', '--align_in_image', action='store_true', help='The raw payload needs to be aligned in place or not')
 
     # Parse command line arguments
     args = parser.parse_args()
 
+    pld_type = args.type.lower()
+    if pld_type == 'linux' and args.stub == '':
+        print ("For traditional Linux payload, a Linux loader stub binary is required !")
+        return -1
+
     if args.out_image:
         img_bin  = get_file_data (args.in_image)
-        pld_type = args.type.lower()
-        pld_bin  = build_payload (pld_type, img_bin, align_in_image = args.align_in_image, pri_key = args.key, alignment = int(args.align, 0))
+        pld_bin  = build_payload (pld_type, img_bin, stub = args.stub, align_in_image = args.align_in_image, pri_key = args.key, alignment = int(args.align, 0))
         gen_file_from_object (args.out_image, pld_bin)
         print ("The payload image with length 0x%06x has been created successfully !\n%s" % (len(pld_bin), args.out_image))
     else:
