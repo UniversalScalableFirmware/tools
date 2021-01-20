@@ -952,11 +952,10 @@ def parse_payload_bin (bin):
         image.append ((rel_off, bin[rel_off:rel_off + rel_len]))
         offset += dlen + get_padding_size (dlen)
 
-
     offset  = pld_info_hdr.ImageOffset
     pld_len = pld_info_hdr.ImageLength
     image.append ((offset, bin[offset:offset + pld_len]))
-    offset += pld_len
+    offset += pld_len + get_padding_size (pld_len)
 
     if pld_info_hdr.Capability &  PAYLOAD_INFO_HEADER.CAP_AUTH:
         pld_auth_hdr = PAYLOAD_AUTH_HEADER.from_buffer (bin, offset)
